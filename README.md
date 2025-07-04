@@ -16,5 +16,5 @@ This project is a full-stack AI application that combines a Python FastAPI backe
 - Alright so this Project Goal is Not yet accomplished and lots of features are yet under work and I am working on them. 
 - This app is just a prototype right now and there will be way more features in this.
 - This won't be like your regular GPT or anythinglike that.
-- You maybe Able to take some reference from the name of thsi Project About my vision.
+- You maybe Able to take some reference from the name of this Project About my vision.
   
