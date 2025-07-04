@@ -6,3 +6,6 @@ langchain
 # gemini-sdk
 langchain_google_genai
 dotenv
+tinydb
+# For optional compression (if implemented):
+# zlib or similar standard library modules

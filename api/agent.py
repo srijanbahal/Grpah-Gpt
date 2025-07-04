@@ -12,12 +12,17 @@ from pydantic import BaseModel, SecretStr
 from dotenv import load_dotenv
 load_dotenv()
 
+from memory import ContextualMemoryEngine
+from datetime import datetime
+
 
 # Constants and Configuration
 # GEMINI_API_KEY = SecretStr(os.environ["GEMINI_API_KEY"])
 # google_api_key=GEMINI_API_KEY.get_secret_value()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-SERPAPI_API_KEY = SecretStr(os.environ["SERPAPI_API_KEY"])
+SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
+if SERPAPI_API_KEY is None:
+    raise RuntimeError("SERPAPI_API_KEY environment variable is not set. Please set it in your .env file or environment.")
 
 # LLM and Prompt Setup
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -148,42 +153,39 @@ async def execute_tool(tool_call: AIMessage) -> ToolMessage:
 
 # Agent Executor
 class CustomAgentExecutor:
-    def __init__(self, max_iterations: int = 3):
-        self.chat_history: list[BaseMessage] = []
+    def __init__(self, max_iterations: int = 3, window_size: int = 10, db_path: str = "chat_history.json", session_id: str = "default_session"):
+        self.memory = ContextualMemoryEngine(window_size=window_size, db_path=db_path)
+        self.session_id = session_id
         self.max_iterations = max_iterations
         self.agent = (
             {
                 "input": lambda x: x["input"],
-                "chat_history": lambda x: x["chat_history"],
+                "chat_history": lambda x: self.memory.get_recent_context(),
                 "agent_scratchpad": lambda x: x.get("agent_scratchpad", [])
             }
             | prompt
             | llm.bind_tools(tools, tool_choice="any")
         )
 
-    async def invoke(self, input: str, streamer: QueueCallbackHandler, verbose: bool = False) -> dict:
-        # invoke the agent but we do this iteratively in a loop until
-        # reaching a final answer
+    async def invoke(self, input: str, streamer: QueueCallbackHandler, verbose: bool = False, session_id: str = None) -> dict:
+        session_id = session_id or self.session_id
         count = 0
         final_answer: str | None = None
         agent_scratchpad: list[AIMessage | ToolMessage] = []
+        timestamp = datetime.utcnow().isoformat()
         # streaming function
         async def stream(query: str) -> list[AIMessage]:
             response = self.agent.with_config(
                 callbacks=[streamer]
             )
-            # we initialize the output dictionary that we will be populating with
-            # our streamed output
             outputs = []
-            # now we begin streaming
             async for token in response.astream({
                 "input": query,
-                "chat_history": self.chat_history,
+                "chat_history": self.memory.get_recent_context(),
                 "agent_scratchpad": agent_scratchpad
             }):
                 tool_calls = token.additional_kwargs.get("tool_calls")
                 if tool_calls:
-                    # first check if we have a tool call id - this indicates a new tool
                     if tool_calls[0]["id"]:
                         outputs.append(token)
                     else:
@@ -199,22 +201,17 @@ class CustomAgentExecutor:
             ]
 
         while count < self.max_iterations:
-            # invoke a step for the agent to generate a tool call
             tool_calls = await stream(query=input)
-            # gather tool execution coroutines
             tool_obs = await asyncio.gather(
                 *[execute_tool(tool_call) for tool_call in tool_calls]
             )
-            # append tool calls and tool observations to the scratchpad in order
             id2tool_obs = {tool_call.tool_call_id: tool_obs for tool_call, tool_obs in zip(tool_calls, tool_obs)}
             for tool_call in tool_calls:
                 agent_scratchpad.extend([
                     tool_call,
                     id2tool_obs[tool_call.tool_call_id]
                 ])
-            
             count += 1
-            # if the tool call is the final answer tool, we stop
             found_final_answer = False
             for tool_call in tool_calls:
                 if tool_call.tool_calls[0]["name"] == "final_answer":
@@ -222,17 +219,19 @@ class CustomAgentExecutor:
                     final_answer = final_answer_call["args"]["answer"]
                     found_final_answer = True
                     break
-            
-            # Only break the loop if we found a final answer
             if found_final_answer:
                 break
-            
-        # add the final output to the chat history, we only add the "answer" field
-        self.chat_history.extend([
-            HumanMessage(content=input),
-            AIMessage(content=final_answer if final_answer else "No answer found")
-        ])
-        # return the final answer in dict form
+        # Add user and AI messages to memory (sliding window + persistent)
+        self.memory.add_message(session_id, {
+            "role": "user",
+            "content": input,
+            "timestamp": timestamp
+        })
+        self.memory.add_message(session_id, {
+            "role": "ai",
+            "content": final_answer if final_answer else "No answer found",
+            "timestamp": datetime.utcnow().isoformat()
+        })
         return final_answer_call if final_answer else {"answer": "No answer found", "tools_used": []}
 
 # Initialize agent executor
