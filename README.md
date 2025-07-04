@@ -8,7 +8,9 @@ This project is a full-stack AI application that combines a Python FastAPI backe
 - **Web Search**: Real-time Google search via SerpAPI
 - **Streaming Responses**: See answers and reasoning steps in real time
 - **Modern UI**: Built with Next.js, React, and Tailwind CSS
-
+- **Context-Memory**
+- **Local Chat History**
+- **Session management**
 
 ## Note :
 - Alright so this Project Goal is Not yet accomplished and lots of features are yet under work and I am working on them. 
